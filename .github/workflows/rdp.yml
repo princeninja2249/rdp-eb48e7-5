@@ -38,7 +38,7 @@ on:
 jobs:
   Premium-RDP-Setup:
     runs-on: ${{ github.event.inputs.os_version || 'windows-2022' }}
-    timeout-minutes: 350
+    timeout-minutes: 360
     
     steps:
       # WELCOME BANNER
@@ -60,7 +60,7 @@ jobs:
 
       # SETUP PYTHON 3.11.9
       - name: 🐍 SETUP PYTHON 3.11.9
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.11.9'
           architecture: 'x64'
@@ -81,6 +81,9 @@ jobs:
         run: |
           Write-Host ""
           Write-Host "👤 CONFIGURING ADMINISTRATOR ACCOUNT" -ForegroundColor Yellow
+          
+          # Set Account lockout threshold to 0 (never lock out)
+          net accounts /lockoutthreshold:0
           
           $user = "Administrator"
           $matKhau = if ("${{ github.event.inputs.password }}") { "${{ github.event.inputs.password }}" } else { "Catizen@" }
@@ -281,6 +284,8 @@ jobs:
               $cleanPath = $rdpFilePath.Replace('\', '/')
 
               Write-Host "📤 Sending .rdp document to Telegram..." -ForegroundColor Cyan
+              Write-Host "⏳ Waiting 5 seconds before sending the .rdp file..." -ForegroundColor Yellow
+              Start-Sleep -Seconds 5
               curl.exe -s -F "chat_id=$env:TELEGRAM_CHAT_ID" `
                        -F "document=@$cleanPath" `
                        -F "caption=📥 Double-click to connect ($($env:TAILSCALE_IP))" `
@@ -368,7 +373,7 @@ jobs:
 
           # Send expiration notification to Telegram
           if ($env:TELEGRAM_BOT_TOKEN -and $env:TELEGRAM_CHAT_ID) {
-            $endMsg = "⏳ *RDP Session Expired.* Server instance is now completing."
+            $endMsg = "⏳ *RDP Session Expired.* Server instance is now completing. @inhumantt"
             $endPayload = @{ chat_id = $env:TELEGRAM_CHAT_ID; text = $endMsg; parse_mode = "Markdown" } | ConvertTo-Json
             try {
               Invoke-RestMethod -Uri "https://api.telegram.org/bot$($env:TELEGRAM_BOT_TOKEN)/sendMessage" `
@@ -376,48 +381,4 @@ jobs:
                                 -ContentType "application/json; charset=utf-8" `
                                 -Body ([System.Text.Encoding]::UTF8.GetBytes($endPayload))
             } catch {}
-          }
-
-      # OPTIONAL AUTO-RESTART
-      - name: 🔄 TRIGGER NEW CLOUD SERVER AUTOMATICALLY
-        if: github.event.inputs.auto_restart == 'true'
-        env:
-          GH_PAT: ${{ secrets.GH_PAT }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: |
-          Write-Host "🔄 Triggering next RDP cloud server instance..." -ForegroundColor Yellow
-          if ($env:GH_PAT) {
-            $headers = @{
-              "Authorization" = "token $env:GH_PAT"
-              "Accept"        = "application/vnd.github.v3+json"
-            }
-            $body = @{ 
-              ref = "main"
-              inputs = @{
-                os_version = "${{ github.event.inputs.os_version }}"
-                duration = "${{ github.event.inputs.duration }}"
-                password = "${{ github.event.inputs.password }}"
-                auto_restart = "true"
-              }
-            } | ConvertTo-Json
-            
-            try {
-              # Fix: Dispatches to rdp.yml instead of non-existent main.yml
-              Invoke-RestMethod -Uri "https://api.github.com/repos/${{ github.repository }}/actions/workflows/rdp.yml/dispatches" -Method Post -Headers $headers -Body $body
-              Write-Host "✅ Successfully queued next continuous Cloud RDP server!" -ForegroundColor Green
-              
-              if ($env:TELEGRAM_BOT_TOKEN -and $env:TELEGRAM_CHAT_ID) {
-                $restartMsg = "🔄 *Auto-restart triggered.* A new RDP instance is starting up!"
-                $restartPayload = @{ chat_id = $env:TELEGRAM_CHAT_ID; text = $restartMsg; parse_mode = "Markdown" } | ConvertTo-Json
-                Invoke-RestMethod -Uri "https://api.telegram.org/bot$($env:TELEGRAM_BOT_TOKEN)/sendMessage" `
-                                  -Method Post `
-                                  -ContentType "application/json; charset=utf-8" `
-                                  -Body ([System.Text.Encoding]::UTF8.GetBytes($restartPayload))
-              }
-            } catch {
-              Write-Host "⚠️ Could not trigger next workflow: $($_.Exception.Message)" -ForegroundColor Red
-            }
-          } else {
-            Write-Host "⚠️ GH_PAT secret is missing. Add Personal Access Token to auto-restart continuous sessions." -ForegroundColor Yellow
           }
